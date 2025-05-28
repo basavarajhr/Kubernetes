@@ -1,0 +1,194 @@
+Self-Managed Kubernetes Installation Guide:
+=========================================
+1) Switch to root user
+   
+sudo su -
+
+
+2) Disable swap & add kernel settings
+
+swapoff -a
+sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+
+3) Add  kernel settings & Enable IP tables(CNI Prerequisites)
+
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.ipv4.ip_forward = 1
+EOF
+
+# Apply sysctl params without reboot
+
+sudo sysctl --system
+
+# Verify that net.ipv4.ip_forward is set to 1 with:
+
+sysctl net.ipv4.ip_forward
+
+
+4) Install containerd run time:
+
+-> Set up Docker's apt repository.
+
+# Add Docker's official GPG key:
+
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+
+# Install Containerd
+
+sudo apt-get install docker-ce docker-ce-cli containerd.io
+
+
+
+Customizing containerd 
+----------------------[https://github.com/containerd/containerd/blob/main/docs/getting-started.md]
+
+containerd uses a configuration file located in /etc/containerd/config.toml for specifying daemon level options.
+
+containerd config default > /etc/containerd/config.toml
+
+
+# Configuring the systemd cgroup driver 
+
+sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
+
+# Restart and enable containerd service
+
+systemctl restart containerd
+systemctl enable containerd
+
+
+5) Installing kubeadm, kubelet and kubectl                 
+
+-> Update the apt package index and install packages needed to use the Kubernetes apt repository:
+
+sudo apt-get update
+
+# apt-transport-https may be a dummy package; if so, you can skip that package
+
+sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+
+-> Download the public signing key for the Kubernetes package repositories. The same signing key is used for all repositories so you can disregard the version in the URL:
+
+# If the directory `/etc/apt/keyrings` does not exist, it should be created before the curl command, read the note below.
+# sudo mkdir -p -m 755 /etc/apt/keyrings
+
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+-> Add the appropriate Kubernetes apt repository. 
+
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+
+-> Update the apt package index, install kubelet, kubeadm and kubectl, and pin their version:
+
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+
+(Optional) Enable the kubelet service before running kubeadm:
+
+sudo systemctl enable --now kubelet
+---------------------
+
+IF THIS ABOVE INSTRUCTION DON'T WORK THEN REFER TO THE MITHUN TECH K8s INSTALLATION FILE.
+
+# Enable and start kubelet service
+
+systemctl daemon-reload 
+systemctl start kubelet 
+systemctl enable kubelet.service
+
+---------------------                                                           
+============= COMMO FOR MASTER & WORKER NODES ENDS ==========
+
+
+===========In Master Node Start====================
+# Steps Only For Kubernetes Master
+
+# Switch to the root user.
+
+sudo su -
+
+# Initialize Kubernates master by executing below commond.
+
+kubeadm init
+
+kubeadm join 172.31.13.31:6443 --token 29lgsu.o3cmwvqgpkutzv84 \
+        --discovery-token-ca-cert-hash sha256:e186dd935bbbf2dd605ec84135c9eeb29025491fc07b17bbb33194f6bffd2654
+
+# If you want to initialize kubernetes on Public EndPoint(Not recommended in real time). You can use below option Replace PUBLIC_IP with actual public ip of your kubernetes master node (Recommended to use Elastic(Create and assign elastic IP to master node and use that Elastic IP below)).Replace PORT with 6443 (API Server Port). 
+
+kubeadm init --control-plane-endpoint "PUBLIC_IP:PORT"
+
+IF Error
+sudo kubeadm init --cri-socket /run/containerd/containerd.sock
+
+
+# Configure kubectl  exit as root user & exeucte as normal ubuntu user
+exit
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+# To verify, if kubectl is working or not, run the following command.
+
+kubectl get pods -o wide -n kube-system
+
+#You will notice from the previous command, that all the pods are running except one: ‘core-dns’. For resolving this we will install a # pod network addon like Calico or Weavenet ..etc. 
+
+
+Note: Install any one network addon don't install both. Install either weave net or calico.
+
+To install Weaven net run the following command.
+
+kubectl apply -f https://reweave.azurewebsites.net/k8s/v1.29/net.yaml
+
+
+kubectl get nodes
+
+kubectl get pods
+kubectl get pods --all-namespaces
+
+
+# Get token
+
+kubeadm token create --print-join-command
+
+=========== IN MASTER NODE ENDS ===================
+
+
+Add Worker Machines to Kubernates Master
+=========================================
+
+Copy kubeadm join token from and execute in Worker Nodes to join to cluster
+
+Run the command that was output by 
+
+kubeadm init
+
+[Example :
+
+kubeadm join --token <token> <control-plane-host>:<control-plane-port> --discovery-token-ca-cert-hash sha256:<hash>
+
+]
+
+You will get like below output:
+
+kubeadm join 172.31.10.156:6443 --token te79sb.ze3hjcd1yvzrwcgc \
+        --discovery-token-ca-cert-hash sha256:b0c856e29881b1a39477fb5c0b05ff16d2a501899551f8aca60723345383baf7
